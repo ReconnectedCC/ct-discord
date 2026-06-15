@@ -80,19 +80,21 @@ public class BridgeEvents {
 
             var playerName = sender.getDisplayName().getString();
             var avatarUrl = Utils.getAvatarUrl(sender);
-            bridge.sendPlayerMessage(message.getSignedContent(), playerName, avatarUrl);
+            bridge.sendPlayerMessage(message.getSignedContent(), sender, playerName, avatarUrl);
         });
 
         ServerMessageEvents.COMMAND_MESSAGE.register((message, source, params) -> {
             String avatarUrl;
+            ServerPlayerEntity player = null;
             if (source.isExecutedByPlayer()) {
-                avatarUrl = Utils.getAvatarUrl(Objects.requireNonNull(source.getPlayer()));
+                player = Objects.requireNonNull(source.getPlayer());
+                avatarUrl = Utils.getAvatarUrl(player);
             } else {
                 avatarUrl = RccDiscord.CONFIG.serverAvatarUrl;
             }
             var name = source.getDisplayName().getString();
 
-            bridge.sendPlayerMessage(message.getSignedContent(), name, avatarUrl);
+            bridge.sendPlayerMessage(message.getSignedContent(), player, name, avatarUrl);
         });
     }
 

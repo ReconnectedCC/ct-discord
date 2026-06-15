@@ -17,12 +17,18 @@ import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
+import net.minecraft.item.tooltip.TooltipType;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.text.Text;
+import net.minecraft.registry.Registries;
 import net.minecraft.util.WorldSavePath;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,6 +42,8 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class RccDiscord implements ModInitializer {
 
@@ -186,23 +194,131 @@ public class RccDiscord implements ModInitializer {
     }
 
     public void sendPlayerMessage(String message, String name, String avatarUrl) {
+        sendPlayerMessage(message, null, name, avatarUrl);
+    }
+
+    public void sendPlayerMessage(String message, @Nullable ServerPlayerEntity player, String name, String avatarUrl) {
         if (client.isNotReady())
             return;
         for (Map.Entry<String, String> replacement : CONFIG.autoReplacementsM2D.entrySet()) {
             message = message.replaceAll(replacement.getKey(), replacement.getValue());
         }
-        var webhookMessage = new WebhookMessageBuilder()
+        var itemPreview = makeItemPreview(message, player);
+        var builder = new WebhookMessageBuilder()
                 .setAvatarUrl(avatarUrl)
                 .setUsername(name)
-                .setContent(message)
+                .setContent(itemPreview.message())
                 .setAllowedMentions(
                         new AllowedMentions()
                                 .withParseUsers(true)
                                 .withRoles(CONFIG.allowedRoleMentions)
                                 .withParseEveryone(false)
-                )
+                );
+        if (itemPreview.embed() != null) {
+            builder.addEmbeds(itemPreview.embed());
+        }
+        client.webhookClient().send(builder.build());
+    }
+
+    private ItemPreview makeItemPreview(String message, @Nullable ServerPlayerEntity player) {
+        if (!CONFIG.enableItemPreviews || player == null || CONFIG.itemPreviewToken.isBlank() || !message.contains(CONFIG.itemPreviewToken)) {
+            return new ItemPreview(message, null);
+        }
+
+        var stack = player.getMainHandStack();
+        if (stack.isEmpty()) {
+            return new ItemPreview(replaceItemToken(message, "Air"), makeEmptyItemEmbed());
+        }
+
+        var itemName = stack.getName().getString();
+        var outputMessage = replaceItemToken(message, itemName);
+        var embed = makeItemEmbed(stack, player, itemName);
+        return new ItemPreview(outputMessage, embed);
+    }
+
+    private WebhookEmbed makeItemEmbed(ItemStack stack, ServerPlayerEntity player, String itemName) {
+        var tooltip = stack.getTooltip(Item.TooltipContext.DEFAULT, player, TooltipType.BASIC)
+                .stream()
+                .map(Text::getString)
+                .filter(line -> !line.isBlank())
+                .filter(line -> !line.equals(itemName))
+                .limit(Math.max(CONFIG.itemPreviewMaxTooltipLines, 0))
+                .map(RccDiscord::escapeDiscordText)
+                .toList();
+
+        var description = new StringBuilder();
+        if (!tooltip.isEmpty()) {
+            for (var line : tooltip) {
+                description.append(line).append('\n');
+            }
+        }
+
+        var descriptionText = description.toString().trim();
+
+        var title = escapeDiscordText(itemName);
+        if (stack.getCount() > 1) {
+            title += " x" + stack.getCount();
+        }
+
+        var itemId = Registries.ITEM.getId(stack.getItem());
+        var builder = new WebhookEmbedBuilder()
+                .setTitle(new WebhookEmbed.EmbedTitle(title, null))
+                .setThumbnailUrl(makeItemThumbnailUrl(itemId.getNamespace(), itemId.getPath()))
+                .setFooter(new WebhookEmbed.EmbedFooter(itemId.toString(), null))
+                .setColor(0x5865F2);
+        if (!descriptionText.isEmpty()) {
+            builder.setDescription(truncateDiscordText(descriptionText, 1000));
+        }
+        if (stack.isDamageable()) {
+            builder.addField(new WebhookEmbed.EmbedField(
+                    true,
+                    "Durability",
+                    (stack.getMaxDamage() - stack.getDamage()) + " / " + stack.getMaxDamage()
+            ));
+        }
+
+        return builder.build();
+    }
+
+    private WebhookEmbed makeEmptyItemEmbed() {
+        return new WebhookEmbedBuilder()
+                .setTitle(new WebhookEmbed.EmbedTitle("Air", null))
+                .setThumbnailUrl(makeItemThumbnailUrl("minecraft", "air"))
+                .setFooter(new WebhookEmbed.EmbedFooter("minecraft:air", null))
+                .setColor(0x5865F2)
                 .build();
-        client.webhookClient().send(webhookMessage);
+    }
+
+    private static String makeItemThumbnailUrl(String mod, String item) {
+        return CONFIG.itemPreviewThumbnailUrl
+                .replace("{mod}", mod)
+                .replace("{item}", item);
+    }
+
+    private static String replaceItemToken(String message, String itemName) {
+        return message.replaceFirst(Pattern.quote(CONFIG.itemPreviewToken), Matcher.quoteReplacement("**[" + escapeDiscordText(itemName) + "]**"));
+    }
+
+    private static String escapeDiscordText(String text) {
+        return text
+                .replace("\\", "\\\\")
+                .replace("*", "\\*")
+                .replace("_", "\\_")
+                .replace("~", "\\~")
+                .replace("`", "\\`")
+                .replace("|", "\\|")
+                .replace("@", "@\u200B");
+    }
+
+    private static String truncateDiscordText(String text, int maxLength) {
+        if (text.length() <= maxLength) {
+            return text;
+        }
+
+        return text.substring(0, Math.max(maxLength - 3, 0)) + "...";
+    }
+
+    private record ItemPreview(String message, @Nullable WebhookEmbed embed) {
     }
 
     public void setStatus(String string) {
