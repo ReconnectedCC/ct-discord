@@ -13,6 +13,7 @@ import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import net.dv8tion.jda.api.OnlineStatus;
 import net.dv8tion.jda.api.entities.Activity;
+import net.dv8tion.jda.api.entities.Member;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -56,6 +57,7 @@ public class RccDiscord implements ModInitializer {
     private MinecraftServer mcServer;
 
     private static final Queue<Component> chatQueue = new ConcurrentLinkedQueue<>();
+    private static final Pattern DISCORD_ACCOUNT_PATTERN = Pattern.compile("(?<!\\S)@([A-Za-z0-9_.-]{2,32})");
 
     public RccDiscord() {
         INSTANCE = this;
@@ -195,6 +197,7 @@ public class RccDiscord implements ModInitializer {
     public void sendPlayerMessage(String message, @Nullable ServerPlayerEntity player, String name, String avatarUrl) {
         if (client.isNotReady())
             return;
+        message = autoCompleteDiscordAccounts(message);
         for (Map.Entry<String, String> replacement : CONFIG.autoReplacementsM2D.entrySet()) {
             message = message.replaceAll(replacement.getKey(), replacement.getValue());
         }
@@ -213,6 +216,46 @@ public class RccDiscord implements ModInitializer {
             builder.addEmbeds(itemPreview.embed());
         }
         client.webhookClient().send(builder.build());
+    }
+
+    private String autoCompleteDiscordAccounts(String message) {
+        if (message.indexOf('@') == -1) {
+            return message;
+        }
+
+        var guild = client.guild();
+        if (guild == null) {
+            return message;
+        }
+
+        var matcher = DISCORD_ACCOUNT_PATTERN.matcher(message);
+        var output = new StringBuffer(message.length());
+        while (matcher.find()) {
+            var accountName = matcher.group(1);
+            var snowflakeId = findSnowflakeByAccountName(guild.getMembers(), accountName);
+            if (snowflakeId == null) {
+                matcher.appendReplacement(output, Matcher.quoteReplacement(matcher.group()));
+                continue;
+            }
+            matcher.appendReplacement(output, Matcher.quoteReplacement("<@" + snowflakeId + ">"));
+        }
+        matcher.appendTail(output);
+        return output.toString();
+    }
+
+    private @Nullable String findSnowflakeByAccountName(List<Member> members, String accountName) {
+        Member prefixMatch = null;
+        for (var member : members) {
+            var effectiveName = member.getEffectiveName();
+            var username = member.getUser().getName();
+            if (effectiveName.equalsIgnoreCase(accountName) || username.equalsIgnoreCase(accountName)) {
+                return member.getId();
+            }
+            if (prefixMatch == null && (effectiveName.regionMatches(true, 0, accountName, 0, accountName.length()) || username.regionMatches(true, 0, accountName, 0, accountName.length()))) {
+                prefixMatch = member;
+            }
+        }
+        return prefixMatch == null ? null : prefixMatch.getId();
     }
 
     private ItemPreview makeItemPreview(String message, @Nullable ServerPlayerEntity player) {
