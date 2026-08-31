@@ -25,6 +25,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
 import net.minecraft.registry.Registries;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.WorldSavePath;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -41,6 +42,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -56,6 +58,7 @@ public class RccDiscord implements ModInitializer {
     private MinecraftServer mcServer;
 
     private static final Queue<Component> chatQueue = new ConcurrentLinkedQueue<>();
+    private static final List<Predicate<Identifier>> TOOLTIP_METADATA_PREVIEW_MATCHERS = List.of(RccDiscord::isVanillaMusicDisc);
 
     public RccDiscord() {
         INSTANCE = this;
@@ -232,7 +235,7 @@ public class RccDiscord implements ModInitializer {
     }
 
     private WebhookEmbed makeItemEmbed(ItemStack stack, ServerPlayerEntity player, String itemName) {
-        var defaultItemName = stack.getName().getString();
+        var defaultItemName = stack.getItem().getName().getString();
         var tooltip = stack.getTooltip(player, TooltipContext.BASIC)
                 .stream()
                 .map(Text::getString)
@@ -280,7 +283,7 @@ public class RccDiscord implements ModInitializer {
     private String resolveItemPreviewName(ItemStack stack, ServerPlayerEntity player) {
         var defaultItemName = stack.getName().getString();
         var itemId = Registries.ITEM.getId(stack.getItem());
-        if (!"minecraft".equals(itemId.getNamespace()) || !itemId.getPath().startsWith("music_disc_")) {
+        if (TOOLTIP_METADATA_PREVIEW_MATCHERS.stream().noneMatch(matcher -> matcher.test(itemId))) {
             return defaultItemName;
         }
 
@@ -291,6 +294,10 @@ public class RccDiscord implements ModInitializer {
                 .filter(line -> !line.equals(defaultItemName))
                 .findFirst()
                 .orElse(defaultItemName);
+    }
+
+    private static boolean isVanillaMusicDisc(Identifier itemId) {
+        return "minecraft".equals(itemId.getNamespace()) && itemId.getPath().startsWith("music_disc_");
     }
 
     private WebhookEmbed makeEmptyItemEmbed() {
