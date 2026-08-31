@@ -225,18 +225,20 @@ public class RccDiscord implements ModInitializer {
             return new ItemPreview(replaceItemToken(message, "Air"), makeEmptyItemEmbed());
         }
 
-        var itemName = stack.getName().getString();
+        var itemName = resolveItemPreviewName(stack, player);
         var outputMessage = replaceItemToken(message, itemName);
         var embed = makeItemEmbed(stack, player, itemName);
         return new ItemPreview(outputMessage, embed);
     }
 
     private WebhookEmbed makeItemEmbed(ItemStack stack, ServerPlayerEntity player, String itemName) {
+        var defaultItemName = stack.getName().getString();
         var tooltip = stack.getTooltip(player, TooltipContext.BASIC)
                 .stream()
                 .map(Text::getString)
                 .filter(line -> !line.isBlank())
                 .filter(line -> !line.equals(itemName))
+                .filter(line -> !line.equals(defaultItemName))
                 .limit(Math.max(CONFIG.itemPreviewMaxTooltipLines, 0))
                 .map(RccDiscord::escapeDiscordText)
                 .toList();
@@ -273,6 +275,22 @@ public class RccDiscord implements ModInitializer {
         }
 
         return builder.build();
+    }
+
+    private String resolveItemPreviewName(ItemStack stack, ServerPlayerEntity player) {
+        var defaultItemName = stack.getName().getString();
+        var itemId = Registries.ITEM.getId(stack.getItem());
+        if (!"minecraft".equals(itemId.getNamespace()) || !itemId.getPath().startsWith("music_disc_")) {
+            return defaultItemName;
+        }
+
+        return stack.getTooltip(player, TooltipContext.BASIC)
+                .stream()
+                .map(Text::getString)
+                .filter(line -> !line.isBlank())
+                .filter(line -> !line.equals(defaultItemName))
+                .findFirst()
+                .orElse(defaultItemName);
     }
 
     private WebhookEmbed makeEmptyItemEmbed() {
